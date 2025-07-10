@@ -1,0 +1,1887 @@
+{
+  "openapi": "3.0.1",
+  "info": {
+    "title": "SupervIA - AI Service API",
+    "version": "1.0.0",
+    "description": "API du service d'intelligence artificielle de SupervIA. Il expose deux agents principaux : le **Dashboard Agent** pour la génération de tableaux de bord, et l'**Ops Assistant** pour le diagnostic et l'assistance opérationnelle via un chat interactif.",
+    "contact": {
+      "name": "SupervIA Team",
+      "url": "https://github.com/zkerkeb-class/service-ia-Tadayoshi123"
+    },
+    "license": {
+      "name": "MIT",
+      "url": "https://opensource.org/licenses/MIT"
+    }
+  },
+  "servers": [
+    {
+      "url": "http://localhost:3004",
+      "description": "Serveur de développement local"
+    },
+    {
+      "url": "http://localhost:8080/api/v1/ai",
+      "description": "Via la passerelle API Nginx"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Dashboard Agent",
+      "description": "Agent IA pour la génération et la gestion intelligentes de dashboards."
+    },
+    {
+      "name": "Ops Assistant",
+      "description": "Assistant IA pour la supervision, le diagnostic et l'optimisation des opérations."
+    },
+    {
+      "name": "Cache",
+      "description": "Gestion du cache Redis pour les réponses de l'IA."
+    },
+    {
+      "name": "Health",
+      "description": "Endpoints de vérification de l'état de santé du service."
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "UserAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "Token d'accès JWT (RS256) pour l'authentification des utilisateurs finaux."
+      }
+    },
+    "schemas": {
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": false
+          },
+          "message": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string",
+            "nullable": true
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "nullable": true
+          }
+        },
+        "required": [
+          "success",
+          "message"
+        ]
+      },
+      "DashboardBlock": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "ID unique du bloc."
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "line-chart",
+              "bar-chart",
+              "pie-chart",
+              "gauge",
+              "metric",
+              "table",
+              "text",
+              "status",
+              "alert-list"
+            ],
+            "description": "Type de visualisation du bloc."
+          },
+          "title": {
+            "type": "string",
+            "description": "Titre du bloc."
+          },
+          "layout": {
+            "type": "object",
+            "properties": {
+              "x": {
+                "type": "integer",
+                "description": "Position en X sur la grille."
+              },
+              "y": {
+                "type": "integer",
+                "description": "Position en Y sur la grille."
+              },
+              "w": {
+                "type": "integer",
+                "description": "Largeur du bloc en unités de grille."
+              },
+              "h": {
+                "type": "integer",
+                "description": "Hauteur du bloc en unités de grille."
+              }
+            }
+          },
+          "dataSource": {
+            "type": "object",
+            "description": "Configuration de la source de données (Prometheus, API, statique)."
+          },
+          "config": {
+            "type": "object",
+            "description": "Configuration spécifique à la visualisation."
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "title",
+          "layout"
+        ]
+      },
+      "DashboardConfig": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "Titre du dashboard."
+          },
+          "description": {
+            "type": "string",
+            "nullable": true,
+            "description": "Description du dashboard."
+          },
+          "blocks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DashboardBlock"
+            }
+          }
+        },
+        "required": [
+          "title",
+          "blocks"
+        ]
+      },
+      "DashboardContext": {
+        "type": "object",
+        "description": "Contexte optionnel d'un dashboard existant pour guider la génération.",
+        "properties": {
+          "dashboardTitle": {
+            "type": "string"
+          },
+          "existingBlocks": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "preferredMetrics": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "ChatRequest": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true,
+            "description": "ID de session pour conserver le contexte. Si non fourni, une nouvelle session est créée."
+          },
+          "message": {
+            "type": "string",
+            "description": "Message de l'utilisateur.",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "context": {
+            "type": "object",
+            "nullable": true,
+            "description": "Contexte additionnel (par exemple, le dashboard actuel consulté par l'utilisateur)."
+          }
+        },
+        "required": [
+          "message"
+        ]
+      },
+      "ChatResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "sessionId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "message": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "role": {
+                "type": "string",
+                "example": "assistant"
+              },
+              "content": {
+                "type": "string",
+                "description": "Réponse textuelle de l'assistant."
+              },
+              "timestamp": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          },
+          "metadata": {
+            "type": "object",
+            "properties": {
+              "toolsUsedCount": {
+                "type": "integer",
+                "description": "Nombre d'outils appelés par l'IA pour formuler sa réponse."
+              }
+            }
+          }
+        }
+      },
+      "HealthStatus": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "example": "UP"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "dependencies": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "CacheStats": {
+        "type": "object",
+        "properties": {
+          "keys": {
+            "type": "integer"
+          },
+          "hits": {
+            "type": "integer"
+          },
+          "misses": {
+            "type": "integer"
+          },
+          "hitRate": {
+            "type": "number",
+            "format": "float"
+          },
+          "memoryUsage": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  },
+  "paths": {
+    "/api/cache/stats": {
+      "get": {
+        "summary": "Obtenir les statistiques du cache Redis",
+        "tags": [
+          "Cache"
+        ],
+        "security": [
+          {
+            "UserAuth": []
+          }
+        ],
+        "description": "Retourne des statistiques d'utilisation du cache Redis, comme le nombre de clés, le taux de succès (hit rate) et l'utilisation de la mémoire. Nécessite des droits d'administrateur.",
+        "responses": {
+          "200": {
+            "description": "Statistiques du cache récupérées avec succès.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CacheStats"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Non autorisé."
+          },
+          "403": {
+            "description": "Permissions insuffisantes."
+          }
+        }
+      }
+    },
+    "/api/cache/flush": {
+      "delete": {
+        "summary": "Vider complètement le cache Redis",
+        "tags": [
+          "Cache"
+        ],
+        "security": [
+          {
+            "UserAuth": []
+          }
+        ],
+        "description": "Supprime toutes les clés du cache Redis pour la base de données configurée. Opération destructive. Nécessite des droits d'administrateur.",
+        "responses": {
+          "200": {
+            "description": "Cache vidé avec succès.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "Cache flushed successfully"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Non autorisé."
+          },
+          "403": {
+            "description": "Permissions insuffisantes."
+          }
+        }
+      }
+    },
+    "/api/cache/keys": {
+      "get": {
+        "summary": "Lister les clés du cache",
+        "tags": [
+          "Cache"
+        ],
+        "security": [
+          {
+            "UserAuth": []
+          }
+        ],
+        "description": "Récupère une liste paginée de toutes les clés actuellement dans le cache Redis. Nécessite des droits d'administrateur.",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "schema": {
+              "type": "integer",
+              "default": 0
+            },
+            "description": "Le curseur pour la pagination (obtenu depuis la réponse précédente)."
+          },
+          {
+            "in": "query",
+            "name": "count",
+            "schema": {
+              "type": "integer",
+              "default": 100
+            },
+            "description": "Le nombre de clés à retourner par page."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Liste de clés récupérée."
+          },
+          "401": {
+            "description": "Non autorisé."
+          },
+          "403": {
+            "description": "Permissions insuffisantes."
+          }
+        }
+      }
+    },
+    "/api/cache/keys/{key}": {
+      "delete": {
+        "summary": "Supprimer une clé spécifique du cache",
+        "tags": [
+          "Cache"
+        ],
+        "security": [
+          {
+            "UserAuth": []
+          }
+        ],
+        "description": "Supprime une clé unique du cache Redis. Nécessite des droits d'administrateur.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "La clé à supprimer (doit être encodée en URL si elle contient des caractères spéciaux)."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Clé supprimée avec succès."
+          },
+          "401": {
+            "description": "Non autorisé."
+          },
+          "403": {
+            "description": "Permissions insuffisantes."
+          },
+          "404": {
+            "description": "Clé non trouvée."
+          }
+        }
+      }
+    },
+    "/api/dashboard-agent/generate": {
+      "post": {
+        "summary": "Génère un dashboard complet",
+        "tags": [
+          "Dashboard Agent"
+        ],
+        "description": "Crée une configuration de dashboard JSON complète basée sur les exigences de l'utilisateur, les métriques disponibles et des templates optionnels.",
+        "security": [
+          {
+            "UserAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenerateDashboardRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Dashboard généré avec succès.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "dashboard": {
+                      "$ref": "#/components/schemas/DashboardConfig"
+                    },
+                    "recommendations": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Suggestions pour améliorer le dashboard."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Erreurs de validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Erreur interne du serveur.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/dashboard-agent/suggest-layout": {
+      "post": {
+        "summary": "Suggère une disposition de dashboard",
+        "tags": [
+          "Dashboard Agent"
+        ],
+        "description": "Propose une disposition de grille optimale pour un ensemble de métriques donné.",
+        "security": [
+          {
+            "UserAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "metrics": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Liste des noms de métriques à inclure.",
+                    "example": [
+                      "cpu_usage",
+                      "memory_usage",
+                      "api_latency"
+                    ]
+                  },
+                  "screenSize": {
+                    "type": "string",
+                    "enum": [
+                      "mobile",
+                      "tablet",
+                      "desktop",
+                      "large"
+                    ],
+                    "description": "La taille d'écran cible pour l'optimisation.",
+                    "example": "desktop"
+                  },
+                  "priority": {
+                    "type": "string",
+                    "enum": [
+                      "performance",
+                      "aesthetics",
+                      "density"
+                    ],
+                    "description": "Le critère principal pour l'optimisation de la disposition.",
+                    "example": "performance"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Suggestion de disposition générée."
+          },
+          "400": {
+            "description": "Erreurs de validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Erreur interne du serveur.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/dashboard-agent/optimize": {
+      "post": {
+        "summary": "Optimise un dashboard existant",
+        "tags": [
+          "Dashboard Agent"
+        ],
+        "description": "Analyse une configuration de dashboard existante et propose des optimisations pour améliorer les performances et l'expérience utilisateur.",
+        "security": [
+          {
+            "UserAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "currentDashboard": {
+                    "type": "object",
+                    "description": "La configuration JSON du dashboard à optimiser.",
+                    "example": {
+                      "dashboard": {
+                        "title": "Mon Dashboard",
+                        "blocks": [
+                          {
+                            "id": "block1",
+                            "type": "metric",
+                            "title": "CPU Usage"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "optimizationGoals": {
+                    "type": "object",
+                    "description": "Objectifs d'optimisation spécifiques (optionnel).",
+                    "example": {
+                      "performance": true,
+                      "usability": true,
+                      "readability": true
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Optimisations proposées."
+          },
+          "400": {
+            "description": "Erreurs de validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Erreur interne du serveur.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/dashboard-agent/validate": {
+      "post": {
+        "summary": "Valide une configuration de dashboard",
+        "tags": [
+          "Dashboard Agent"
+        ],
+        "description": "Valide la structure et la cohérence d'une configuration de dashboard avec des recommandations d'amélioration.",
+        "security": [
+          {
+            "UserAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "dashboardConfig": {
+                    "type": "object",
+                    "description": "Configuration du dashboard à valider",
+                    "example": {
+                      "dashboard": {
+                        "title": "Dashboard Test",
+                        "blocks": [
+                          {
+                            "id": "metric1",
+                            "type": "metric",
+                            "title": "CPU Usage",
+                            "layout": {
+                              "x": 0,
+                              "y": 0,
+                              "w": 6,
+                              "h": 4
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Validation terminée avec succès."
+          },
+          "400": {
+            "description": "Erreurs de validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Erreur interne du serveur.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/dashboard-agent/suggest-templates": {
+      "post": {
+        "summary": "Suggère des templates de dashboard",
+        "tags": [
+          "Dashboard Agent"
+        ],
+        "description": "Suggère des templates appropriés selon le cas d'usage et les préférences utilisateur.",
+        "security": [
+          {
+            "UserAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "useCase": {
+                    "type": "string",
+                    "description": "Cas d'usage du dashboard",
+                    "example": "Surveillance des performances d'une application web",
+                    "minLength": 5,
+                    "maxLength": 200
+                  },
+                  "complexity": {
+                    "type": "string",
+                    "enum": [
+                      "simple",
+                      "medium",
+                      "complex"
+                    ],
+                    "description": "Complexité souhaitée",
+                    "example": "medium"
+                  },
+                  "preferences": {
+                    "type": "object",
+                    "description": "Préférences utilisateur (optionnel)",
+                    "example": {
+                      "focus": "performance",
+                      "style": "modern",
+                      "metrics": [
+                        "cpu",
+                        "memory",
+                        "latency"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Suggestions générées avec succès."
+          },
+          "400": {
+            "description": "Erreurs de validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Erreur interne du serveur.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/dashboard-agent/recommend-blocks": {
+      "post": {
+        "summary": "Recommande des blocs pour un dashboard",
+        "tags": [
+          "Dashboard Agent"
+        ],
+        "description": "Suggère des blocs supplémentaires pour améliorer un dashboard existant selon son objectif.",
+        "security": [
+          {
+            "UserAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "dashboardPurpose": {
+                    "type": "string",
+                    "description": "Objectif du dashboard",
+                    "example": "Surveillance des performances d'une API",
+                    "minLength": 5,
+                    "maxLength": 200
+                  },
+                  "existingBlocks": {
+                    "type": "array",
+                    "items": {
+                      "type": "object"
+                    },
+                    "description": "Blocs existants dans le dashboard",
+                    "example": [
+                      {
+                        "id": "cpu-block",
+                        "type": "metric",
+                        "title": "CPU Usage"
+                      }
+                    ]
+                  },
+                  "focus": {
+                    "type": "string",
+                    "description": "Focus du dashboard (optionnel)",
+                    "example": "performance"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Recommandations générées avec succès."
+          },
+          "400": {
+            "description": "Erreurs de validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Erreur interne du serveur.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/dashboard-agent/templates": {
+      "get": {
+        "summary": "Récupère les templates disponibles",
+        "tags": [
+          "Dashboard Agent"
+        ],
+        "description": "Retourne la liste des templates de dashboard disponibles avec filtrage optionnel.",
+        "security": [
+          {
+            "UserAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "query",
+            "name": "category",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Filtrer par catégorie de template",
+            "example": "infrastructure"
+          },
+          {
+            "in": "query",
+            "name": "complexity",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "simple",
+                "medium",
+                "complex"
+              ]
+            },
+            "description": "Filtrer par niveau de complexité",
+            "example": "medium"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Templates récupérés avec succès."
+          },
+          "500": {
+            "description": "Erreur interne du serveur.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/dashboard-agent/explain": {
+      "post": {
+        "summary": "Explique une configuration de dashboard",
+        "tags": [
+          "Dashboard Agent"
+        ],
+        "description": "Fournit une explication détaillée d'une configuration de dashboard complexe.",
+        "security": [
+          {
+            "UserAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "dashboardConfig": {
+                    "type": "object",
+                    "description": "Configuration du dashboard à expliquer",
+                    "example": {
+                      "dashboard": {
+                        "title": "Dashboard Complexe",
+                        "blocks": [
+                          {
+                            "id": "block1",
+                            "type": "line-chart",
+                            "title": "Graphique"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "language": {
+                    "type": "string",
+                    "enum": [
+                      "fr",
+                      "en"
+                    ],
+                    "description": "Langue de l'explication",
+                    "default": "fr",
+                    "example": "fr"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Explication générée avec succès."
+          },
+          "500": {
+            "description": "Erreur interne du serveur.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/health": {
+      "get": {
+        "summary": "Health check simple",
+        "tags": [
+          "Health"
+        ],
+        "description": "Retourne un statut de base pour indiquer que le service est en vie (liveness probe). Ne vérifie pas les dépendances.",
+        "responses": {
+          "200": {
+            "description": "Service opérationnel.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "OK"
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "AI Service is running"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/health/details": {
+      "get": {
+        "summary": "Health check détaillé (readiness probe)",
+        "tags": [
+          "Health"
+        ],
+        "description": "Retourne un statut détaillé de santé, incluant les dépendances comme Redis et OpenAI. Idéal pour un readiness probe.",
+        "responses": {
+          "200": {
+            "description": "Service et dépendances sont prêts à recevoir du trafic.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthStatus"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Une ou plusieurs dépendances critiques sont hors service.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ops-assistant/analyze-metrics": {
+      "post": {
+        "summary": "Analyse un ensemble de métriques",
+        "tags": [
+          "Ops Assistant"
+        ],
+        "description": "Fournit une analyse, un diagnostic et des recommandations basés sur un ensemble de métriques système.",
+        "security": [
+          {
+            "UserAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "metrics": {
+                    "type": "array",
+                    "items": {
+                      "type": "object"
+                    },
+                    "description": "Tableau d'objets de métriques à analyser."
+                  },
+                  "timeRange": {
+                    "type": "string",
+                    "enum": [
+                      "1h",
+                      "6h",
+                      "24h",
+                      "7d",
+                      "30d"
+                    ],
+                    "description": "Plage temporelle de l'analyse.",
+                    "example": "24h"
+                  },
+                  "severity": {
+                    "type": "string",
+                    "enum": [
+                      "info",
+                      "warning",
+                      "error",
+                      "critical"
+                    ],
+                    "description": "Seuil de sévérité pour l'analyse.",
+                    "example": "warning"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Analyse des métriques réussie."
+          },
+          "400": {
+            "description": "Erreurs de validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Erreur interne du serveur.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ops-assistant/diagnose-issue": {
+      "post": {
+        "summary": "Diagnostique un problème système",
+        "tags": [
+          "Ops Assistant"
+        ],
+        "description": "Analyse les symptômes, les services affectés et les logs pour diagnostiquer un problème.",
+        "security": [
+          {
+            "UserAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "symptoms": {
+                    "type": "string",
+                    "description": "Description des symptômes observés.",
+                    "example": "Le service de paiement répond avec des erreurs 503."
+                  },
+                  "affectedServices": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Liste des services impactés.",
+                    "example": [
+                      "payment-service",
+                      "notification-service"
+                    ]
+                  },
+                  "errorLogs": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Extrait des logs d'erreurs pertinents."
+                  },
+                  "urgency": {
+                    "type": "string",
+                    "enum": [
+                      "low",
+                      "medium",
+                      "high",
+                      "critical"
+                    ],
+                    "description": "Niveau d'urgence du problème.",
+                    "example": "high"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Diagnostic généré avec succès."
+          },
+          "400": {
+            "description": "Erreurs de validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Erreur interne du serveur.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ops-assistant/suggest-alerts": {
+      "post": {
+        "summary": "Suggère des règles d'alertes",
+        "tags": [
+          "Ops Assistant"
+        ],
+        "description": "Propose des règles d'alertes intelligentes basées sur un ensemble de métriques et une baseline optionnelle.",
+        "security": [
+          {
+            "UserAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "metrics": {
+                    "type": "array",
+                    "items": {
+                      "type": "object"
+                    },
+                    "description": "Les métriques pour lesquelles suggérer des alertes."
+                  },
+                  "baseline": {
+                    "type": "object",
+                    "description": "Données de baseline pour comparaison (optionnel)."
+                  },
+                  "sensitivity": {
+                    "type": "string",
+                    "enum": [
+                      "low",
+                      "medium",
+                      "high"
+                    ],
+                    "description": "Sensibilité des seuils d'alerte à suggérer.",
+                    "example": "medium"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Suggestions d'alertes générées."
+          },
+          "400": {
+            "description": "Erreurs de validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Erreur interne du serveur.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ops-assistant/capacity-planning": {
+      "post": {
+        "summary": "Aide à la planification de capacité",
+        "tags": [
+          "Ops Assistant"
+        ],
+        "description": "Fournit des prévisions et des recommandations pour la planification de capacité future.",
+        "security": [
+          {
+            "UserAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "historicalData": {
+                    "type": "array",
+                    "items": {
+                      "type": "object"
+                    },
+                    "description": "Données historiques de consommation des ressources."
+                  },
+                  "growthRate": {
+                    "type": "number",
+                    "description": "Taux de croissance attendu en pourcentage.",
+                    "example": 15
+                  },
+                  "horizon": {
+                    "type": "string",
+                    "enum": [
+                      "1month",
+                      "3months",
+                      "6months",
+                      "1year"
+                    ],
+                    "description": "Horizon de temps pour la planification.",
+                    "example": "6months"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Analyse de capacité générée."
+          },
+          "400": {
+            "description": "Erreurs de validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Erreur interne du serveur.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ops-assistant/performance-analysis": {
+      "post": {
+        "summary": "Analyse détaillée de la performance",
+        "tags": [
+          "Ops Assistant"
+        ],
+        "description": "Effectue une analyse de performance en corrélant métriques système et application.",
+        "security": [
+          {
+            "UserAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "systemMetrics": {
+                    "type": "object",
+                    "description": "Objet contenant les métriques système."
+                  },
+                  "applicationMetrics": {
+                    "type": "object",
+                    "description": "Objet contenant les métriques applicatives (optionnel)."
+                  },
+                  "analysisType": {
+                    "type": "string",
+                    "enum": [
+                      "realtime",
+                      "trend",
+                      "comparison",
+                      "prediction"
+                    ],
+                    "description": "Type d'analyse à effectuer.",
+                    "example": "realtime"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Analyse de performance réussie."
+          },
+          "400": {
+            "description": "Erreurs de validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Erreur interne du serveur.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ops-assistant/chat": {
+      "post": {
+        "summary": "Interagit avec l'assistant via le chat",
+        "tags": [
+          "Ops Assistant"
+        ],
+        "description": "Envoie un message à l'assistant IA et reçoit une réponse contextuelle.",
+        "security": [
+          {
+            "UserAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Réponse de l'assistant.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Erreurs de validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Erreur interne du serveur.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ops-assistant/explain-metric": {
+      "post": {
+        "summary": "Explique une métrique spécifique",
+        "tags": [
+          "Ops Assistant"
+        ],
+        "description": "Fournit une explication détaillée d'une métrique, sa signification et son interprétation.",
+        "security": [
+          {
+            "UserAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "metricName": {
+                    "type": "string",
+                    "description": "Nom de la métrique à expliquer.",
+                    "example": "cpu_load_15m"
+                  },
+                  "value": {
+                    "type": "number",
+                    "description": "Valeur actuelle de la métrique.",
+                    "example": 0.75
+                  },
+                  "context": {
+                    "type": "object",
+                    "description": "Contexte additionnel pour l'explication (optionnel)."
+                  },
+                  "language": {
+                    "type": "string",
+                    "enum": [
+                      "fr",
+                      "en"
+                    ],
+                    "description": "Langue de l'explication.",
+                    "default": "fr"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Explication de la métrique générée."
+          },
+          "400": {
+            "description": "Erreurs de validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Erreur interne du serveur.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ops-assistant/quick-status": {
+      "post": {
+        "summary": "Vérification rapide du statut système",
+        "tags": [
+          "Ops Assistant"
+        ],
+        "description": "Effectue une vérification rapide de l'état du système en utilisant les outils IA pour fournir un résumé concis et actionnable.",
+        "security": [
+          {
+            "UserAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "includeMetrics": {
+                    "type": "boolean",
+                    "description": "Inclure les métriques de performance dans la vérification",
+                    "default": true,
+                    "example": true
+                  },
+                  "includeAlerts": {
+                    "type": "boolean",
+                    "description": "Inclure les alertes actives dans la vérification",
+                    "default": true,
+                    "example": true
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Statut système obtenu avec succès."
+          },
+          "500": {
+            "description": "Erreur interne du serveur.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ops-assistant/auto-diagnose": {
+      "post": {
+        "summary": "Diagnostic automatique du système",
+        "tags": [
+          "Ops Assistant"
+        ],
+        "description": "Effectue un diagnostic automatique complet en utilisant tous les outils disponibles pour identifier les problèmes et proposer des solutions.",
+        "security": [
+          {
+            "UserAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "focus": {
+                    "type": "string",
+                    "enum": [
+                      "performance",
+                      "errors",
+                      "health",
+                      "all"
+                    ],
+                    "description": "Focus du diagnostic - domaine spécifique à analyser",
+                    "default": "all",
+                    "example": "performance"
+                  },
+                  "timeRange": {
+                    "type": "string",
+                    "enum": [
+                      "1h",
+                      "6h",
+                      "24h",
+                      "7d"
+                    ],
+                    "description": "Période d'analyse pour le diagnostic",
+                    "default": "24h",
+                    "example": "24h"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Diagnostic automatique terminé."
+          },
+          "500": {
+            "description": "Erreur interne du serveur.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ops-assistant/performance-insights": {
+      "post": {
+        "summary": "Insights de performance automatisés",
+        "tags": [
+          "Ops Assistant"
+        ],
+        "description": "Génère des insights de performance en analysant les métriques système pour fournir des recommandations d'optimisation.",
+        "security": [
+          {
+            "UserAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "service": {
+                    "type": "string",
+                    "enum": [
+                      "auth-service",
+                      "db-service",
+                      "ai-service",
+                      "metrics-service",
+                      "notification-service",
+                      "payment-service",
+                      "all"
+                    ],
+                    "description": "Service à analyser pour les insights de performance",
+                    "example": "auth-service"
+                  },
+                  "timeRange": {
+                    "type": "string",
+                    "enum": [
+                      "1h",
+                      "6h",
+                      "24h",
+                      "7d",
+                      "30d"
+                    ],
+                    "description": "Période d'analyse pour les insights",
+                    "default": "24h",
+                    "example": "24h"
+                  },
+                  "analysisType": {
+                    "type": "string",
+                    "enum": [
+                      "overview",
+                      "detailed",
+                      "trends",
+                      "bottlenecks"
+                    ],
+                    "description": "Type d'analyse à effectuer",
+                    "default": "overview",
+                    "example": "detailed"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Insights de performance générés."
+          },
+          "400": {
+            "description": "Erreurs de validation."
+          },
+          "500": {
+            "description": "Erreur interne du serveur."
+          }
+        }
+      }
+    },
+    "/api/ops-assistant/smart-dashboard": {
+      "post": {
+        "summary": "Génération intelligente de dashboard",
+        "tags": [
+          "Ops Assistant"
+        ],
+        "description": "Génère un dashboard intelligent basé sur l'analyse du système actuel et les besoins spécifiés.",
+        "security": [
+          {
+            "UserAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "purpose": {
+                    "type": "string",
+                    "description": "Objectif du dashboard à générer",
+                    "example": "Surveillance des performances du service d'authentification",
+                    "minLength": 10,
+                    "maxLength": 500
+                  },
+                  "focus": {
+                    "type": "string",
+                    "enum": [
+                      "overview",
+                      "performance",
+                      "errors",
+                      "security",
+                      "custom"
+                    ],
+                    "description": "Focus du dashboard à générer",
+                    "default": "overview",
+                    "example": "performance"
+                  },
+                  "complexity": {
+                    "type": "string",
+                    "enum": [
+                      "simple",
+                      "medium",
+                      "complex"
+                    ],
+                    "description": "Complexité du dashboard souhaitée",
+                    "default": "medium",
+                    "example": "medium"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Dashboard généré avec succès."
+          },
+          "400": {
+            "description": "Erreurs de validation."
+          },
+          "500": {
+            "description": "Erreur interne du serveur."
+          }
+        }
+      }
+    }
+  }
+}
